@@ -9,6 +9,7 @@
   "files": [
     "dist",
     "README.md",
+    "LICENSE",
     ".env.example"
   ],
   "engines": {
@@ -38,6 +39,6 @@
   "homepage": "https://github.com/Revens2/waw",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Revens2/waw-mcp.git"
+    "url": "git+https://github.com/Revens2/waw-mcp.git"
   }
 }
