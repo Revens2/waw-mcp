@@ -1,0 +1,17 @@
+# secrets & local state — NEVER commit
+.env
+.env.local
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+.waw/
+
+# deps
+node_modules/
+
+# os / editor
+Thumbs.db
+.DS_Store
+*.log
