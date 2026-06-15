@@ -115,7 +115,7 @@ var require_main = __commonJS({
     var fs3 = __require("fs");
     var path3 = __require("path");
     var os2 = __require("os");
-    var crypto4 = __require("crypto");
+    var crypto5 = __require("crypto");
     var packageJson = require_package();
     var version2 = packageJson.version;
     var LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
@@ -334,7 +334,7 @@ var require_main = __commonJS({
       const authTag = ciphertext.subarray(-16);
       ciphertext = ciphertext.subarray(12, -16);
       try {
-        const aesgcm = crypto4.createDecipheriv("aes-256-gcm", key, nonce);
+        const aesgcm = crypto5.createDecipheriv("aes-256-gcm", key, nonce);
         aesgcm.setAuthTag(authTag);
         return `${aesgcm.update(ciphertext)}${aesgcm.final()}`;
       } catch (error2) {
@@ -18861,6 +18861,139 @@ function playwrightDriverFactory(opts = {}) {
   };
 }
 
+// src/automation/playwright-perception.ts
+var COLLECT_FN = `() => {
+  function visible(el){ const r=el.getBoundingClientRect(); const s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.visibility!=='hidden' && s.display!=='none'; }
+  function accName(el){
+    let lbl='';
+    if (el.labels && el.labels[0]) lbl = el.labels[0].textContent || '';
+    const txt = (el.tagName==='BUTTON' || el.tagName==='A') ? (el.textContent||'') : '';
+    return (el.getAttribute('aria-label') || lbl || el.getAttribute('placeholder')
+      || txt || el.getAttribute('name') || el.value || '').trim().replace(/\\s+/g,' ').slice(0,120);
+  }
+  function cssPath(el){
+    if (el.id) return '#'+CSS.escape(el.id);
+    const parts=[]; let node=el;
+    while (node && node.nodeType===1 && node.tagName!=='BODY' && parts.length<6){
+      let sel=node.tagName.toLowerCase();
+      const p=node.parentElement;
+      if (p){ const sibs=Array.from(p.children).filter(c=>c.tagName===node.tagName);
+        if (sibs.length>1) sel+=':nth-of-type('+(sibs.indexOf(node)+1)+')'; }
+      parts.unshift(sel); node=node.parentElement;
+    }
+    return parts.join(' > ');
+  }
+  const q='input,button,a[href],select,textarea,[role=button],[contenteditable=true]';
+  const out=[];
+  for (const el of document.querySelectorAll(q)){
+    if (!visible(el) || el.type==='hidden') continue;
+    out.push({
+      tag: el.tagName.toLowerCase(),
+      type: el.getAttribute('type') || undefined,
+      role: el.getAttribute('role') || (el.tagName==='A'?'link':el.tagName.toLowerCase()),
+      name: accName(el),
+      selector: cssPath(el),
+      value: el.value !== undefined ? String(el.value).slice(0,80) : undefined,
+    });
+  }
+  return out;
+}`;
+function playwrightPerceptionFactory(opts = {}) {
+  const timeout = opts.actionTimeoutMs ?? 15e3;
+  return async () => {
+    const { chromium } = await loadPlaywright();
+    const browser = await chromium.launch({ headless: opts.headless ?? true });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.setDefaultTimeout(timeout);
+    return {
+      async goto(url) {
+        await page.goto(url, { waitUntil: "domcontentloaded" });
+      },
+      async observe() {
+        const [raw, screenshotPng, title] = await Promise.all([
+          // evaluate(string) évalue une EXPRESSION : on appelle la fonction (IIFE).
+          page.evaluate(`(${COLLECT_FN})()`),
+          page.screenshot({ type: "png", fullPage: opts.fullPage ?? false }),
+          page.title()
+        ]);
+        const elements = raw.map((e, ref) => ({ ref, ...e }));
+        return { url: page.url(), title, elements, screenshotPng };
+      },
+      async fill(selector, value) {
+        await page.fill(selector, value);
+      },
+      async click(selector) {
+        await page.click(selector);
+      },
+      async close() {
+        await browser.close();
+      }
+    };
+  };
+}
+
+// src/automation/perception.ts
+import crypto4 from "node:crypto";
+var BrowserSessionManager = class {
+  constructor(factory) {
+    this.factory = factory;
+  }
+  factory;
+  sessions = /* @__PURE__ */ new Map();
+  async open(url) {
+    const page = await this.factory();
+    await page.goto(url);
+    const observation = await page.observe();
+    const sessionId = crypto4.randomUUID();
+    this.sessions.set(sessionId, { page, last: observation.elements });
+    return { sessionId, observation };
+  }
+  async observe(sessionId) {
+    const s = this.get(sessionId);
+    const observation = await s.page.observe();
+    s.last = observation.elements;
+    return observation;
+  }
+  async fill(sessionId, target, value) {
+    const s = this.get(sessionId);
+    await s.page.fill(this.resolve(s.last, target), value);
+  }
+  async click(sessionId, target) {
+    const s = this.get(sessionId);
+    await s.page.click(this.resolve(s.last, target));
+  }
+  async close(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s) return;
+    this.sessions.delete(sessionId);
+    await s.page.close();
+  }
+  async closeAll() {
+    const all = [...this.sessions.values()];
+    this.sessions.clear();
+    await Promise.allSettled(all.map((s) => s.page.close()));
+  }
+  list() {
+    return [...this.sessions.keys()];
+  }
+  get(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s) throw new Error(`unknown browser session: ${sessionId}`);
+    return s;
+  }
+  resolve(last, target) {
+    if (target.selector) return target.selector;
+    if (target.ref !== void 0) {
+      const el = last.find((e) => e.ref === target.ref);
+      if (!el) throw new Error(`no element with ref ${target.ref} in last observation`);
+      return el.selector;
+    }
+    throw new Error("provide a ref or a selector");
+  }
+};
+
 // src/mcp/tools.ts
 function createServices(opts = {}) {
   const config2 = loadConfig(opts.env ?? process.env);
@@ -18874,7 +19007,9 @@ function createServices(opts = {}) {
   const registry2 = new Registry(db);
   const driverFactory = opts.driverFactory ?? playwrightDriverFactory({ headless: true });
   const signupRunner = new SignupRunner(db, cipher, store, driverFactory);
-  return { config: config2, db, cipher, store, mailboxes, registry: registry2, signupRunner };
+  const perceptionFactory = opts.perceptionFactory ?? playwrightPerceptionFactory({ headless: true });
+  const sessions = new BrowserSessionManager(perceptionFactory);
+  return { config: config2, db, cipher, store, mailboxes, registry: registry2, signupRunner, sessions };
 }
 function mailboxProvision(svc, opts = {}) {
   return svc.mailboxes.provision(opts);
@@ -18912,6 +19047,21 @@ function registryList(svc, opts = {}) {
 }
 function registryGet(svc, slug) {
   return svc.registry.get(slug);
+}
+function browserOpen(svc, url) {
+  return svc.sessions.open(url);
+}
+function browserObserve(svc, sessionId) {
+  return svc.sessions.observe(sessionId);
+}
+function browserFill(svc, sessionId, target, value) {
+  return svc.sessions.fill(sessionId, target, value);
+}
+function browserClick(svc, sessionId, target) {
+  return svc.sessions.click(sessionId, target);
+}
+function browserClose(svc, sessionId) {
+  return svc.sessions.close(sessionId);
 }
 
 // node_modules/zod/v4/mini/schemas.js
@@ -22971,6 +23121,15 @@ function jsonResult(data) {
 function errorResult(message) {
   return { content: [{ type: "text", text: message }], isError: true };
 }
+function observationResult(obs) {
+  const { screenshotPng, ...meta } = obs;
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(meta, null, 2) },
+      { type: "image", data: screenshotPng.toString("base64"), mimeType: "image/png" }
+    ]
+  };
+}
 function msg(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -23160,6 +23319,96 @@ function buildMcpServer(svc) {
     async ({ slug }) => {
       const rec = registryGet(svc, slug);
       return rec ? jsonResult(rec) : errorResult(`not found: ${slug}`);
+    }
+  );
+  const ACT_TARGET = {
+    sessionId: external_exports.string().describe("Session id from browser_open"),
+    ref: external_exports.number().int().min(0).optional().describe("Element ref from the latest observation"),
+    selector: external_exports.string().optional().describe("CSS selector (alternative to ref)")
+  };
+  server.registerTool(
+    "browser_open",
+    {
+      title: "Open a page (vision + UI tree)",
+      description: "Open a URL in a real browser and return BOTH a screenshot (vision) and the list of interactive elements with refs/roles/names/selectors (UI tree). Combine the image and the element list to act precisely. Returns a sessionId for follow-up calls.",
+      inputSchema: { url: external_exports.string().describe("URL to open") }
+    },
+    async ({ url }) => {
+      try {
+        const { sessionId, observation } = await browserOpen(svc, url);
+        const { screenshotPng, ...meta } = observation;
+        return {
+          content: [
+            { type: "text", text: JSON.stringify({ sessionId, ...meta }, null, 2) },
+            { type: "image", data: screenshotPng.toString("base64"), mimeType: "image/png" }
+          ]
+        };
+      } catch (err) {
+        return errorResult(msg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "browser_observe",
+    {
+      title: "Re-observe the page",
+      description: "Re-capture the current page of a session: fresh screenshot (vision) + interactive elements (UI tree). Call after acting to verify the result and adapt.",
+      inputSchema: { sessionId: external_exports.string() }
+    },
+    async ({ sessionId }) => {
+      try {
+        return observationResult(await browserObserve(svc, sessionId));
+      } catch (err) {
+        return errorResult(msg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "browser_fill",
+    {
+      title: "Fill a field",
+      description: "Type a value into a field, identified by ref (from the last observation) or CSS selector.",
+      inputSchema: { ...ACT_TARGET, value: external_exports.string() }
+    },
+    async ({ sessionId, ref, selector, value }) => {
+      try {
+        await browserFill(svc, sessionId, { ...ref !== void 0 ? { ref } : {}, ...selector ? { selector } : {} }, value);
+        return jsonResult({ ok: true });
+      } catch (err) {
+        return errorResult(msg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "browser_click",
+    {
+      title: "Click an element",
+      description: "Click an element, identified by ref (from the last observation) or CSS selector.",
+      inputSchema: ACT_TARGET
+    },
+    async ({ sessionId, ref, selector }) => {
+      try {
+        await browserClick(svc, sessionId, { ...ref !== void 0 ? { ref } : {}, ...selector ? { selector } : {} });
+        return jsonResult({ ok: true });
+      } catch (err) {
+        return errorResult(msg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "browser_close",
+    {
+      title: "Close the browser session",
+      description: "Close a browser session opened with browser_open and free its resources.",
+      inputSchema: { sessionId: external_exports.string() }
+    },
+    async ({ sessionId }) => {
+      try {
+        await browserClose(svc, sessionId);
+        return jsonResult({ ok: true });
+      } catch (err) {
+        return errorResult(msg(err));
+      }
     }
   );
   return server;
