@@ -1,18 +1,25 @@
 # waw-mcp — World Agentic Web MCP server
 
-The **MCP server** of [WAW](https://github.com/Revens2/waw). It gives an AI agent, over a
-single stdio MCP connection:
+[![npm](https://img.shields.io/npm/v/waw-mcp)](https://www.npmjs.com/package/waw-mcp)
+
+**Automatic authentication & identity for AI agents** over a single stdio MCP connection —
+so an agent **creates its own accounts on third-party services, autonomously**. The MCP
+server of [WAW](https://github.com/Revens2/waw). It gives an agent:
 
 - a **real, valid email address** as its identity (`mailbox_provision`),
 - the ability to **read OTP / verification codes** sent to it (`otp_get`),
 - **autonomous signup** to a website with a real browser (`signup_run`),
-- and **discovery / publishing of MCP servers** by intent in the shared WAW registry
-  (`registry_search` / `registry_register`).
+- **page perception** combining vision + UI tree (`browser_open` / `browser_observe` …),
+- and **discovery / publishing of MCP servers** by intent (`registry_search` / `registry_register`).
 
 This package is the **standalone, runs-anywhere** distribution: one bundled file, started
 by `node` over stdio, configured **only by environment variables** (no secret ever lives in
 the repo). The full source, the HTTP/SMTP gateway that receives email, and the Docker demo
 live in the main repo: **https://github.com/Revens2/waw**.
+
+> **Validated end-to-end**: an agent connects to this published package, provisions an
+> owner-linked identity, signs up on a live site, receives the OTP via a signed webhook, and
+> the account is created — with no human typing a single field. See *Autonomous workflow* below.
 
 ---
 
@@ -24,8 +31,8 @@ npm install -g waw-mcp        # global `waw-mcp` command
 npx waw-mcp
 ```
 
-`better-sqlite3` (native) is installed automatically. For `signup_run` you also need a
-browser once: `npx playwright install chromium`.
+`better-sqlite3` (native) is installed automatically. For `signup_run` and the `browser_*`
+tools you also need a browser once: `npx playwright install chromium`.
 
 ## Configure (environment variables — never commit secrets)
 
@@ -62,7 +69,7 @@ claude mcp add waw --env VAULT_PASSPHRASE=… --env MAIL_DOMAIN=agents.example.c
 
 ---
 
-## Tools
+## Tools (15)
 
 | Tool | Purpose |
 |---|---|
@@ -70,7 +77,26 @@ claude mcp add waw --env VAULT_PASSPHRASE=… --env MAIL_DOMAIN=agents.example.c
 | `mailbox_link_owner` | Link the human operator's real email to a mailbox. |
 | `otp_get` / `emails_list` | Read the latest OTP / recent emails for a mailbox. |
 | `signup_run` | Resumable, idempotent autonomous signup (Playwright + vault + OTP). |
+| `browser_open` / `browser_observe` / `browser_fill` / `browser_click` / `browser_close` | Drive a page combining **vision** (screenshot) + **UI tree** (elements/refs/selectors). |
 | `registry_search` / `registry_register` / `registry_list` / `registry_get` | Discover or publish MCP servers by intent. |
+
+## Autonomous workflow (the point)
+
+An agent authenticates itself and creates an account with **zero human form-filling**:
+
+```
+1. mailbox_list                         → empty? run onboarding
+2. mailbox_provision { ownerEmail }      → identity: you.agent@MAIL_DOMAIN
+3. signup_run { targetUrl, email, … }    → fills the form with a vaulted password,
+                                           waits for the OTP, submits it
+   └─ OTP arrives via a signed webhook into the shared WAW DB, read back automatically
+4. account created ✅   (resumable & idempotent — safe to retry)
+5. registry_register { … }               → publish the service so other agents find it
+```
+
+Hard sites where fixed selectors break? Swap step 3 for the perception loop:
+`browser_open` → look at the **screenshot + element refs** → `browser_fill`/`browser_click`
+by `ref` → `browser_observe` to verify → repeat.
 
 ### First connection — link a human owner
 
