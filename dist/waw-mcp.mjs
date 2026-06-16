@@ -17733,6 +17733,8 @@ function openDb(dbPath2 = ":memory:") {
   const db = new Database(dbPath2);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
+  db.pragma("synchronous = NORMAL");
   db.exec(SCHEMA);
   migrate(db);
   return db;
@@ -18820,6 +18822,19 @@ async function safeClose(driver) {
   }
 }
 
+// src/automation/browser-hardening.ts
+function stealthEnabled(env = process.env) {
+  const v = (env["WAW_STEALTH"] ?? "").toLowerCase();
+  return v !== "0" && v !== "false" && v !== "off";
+}
+function hardenedLaunchArgs(enabled) {
+  return enabled ? ["--disable-blink-features=AutomationControlled"] : [];
+}
+function hardenedContextOptions(enabled) {
+  return enabled ? { viewport: { width: 1280, height: 800 }, locale: "en-US" } : {};
+}
+var MASK_WEBDRIVER = "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });";
+
 // src/automation/playwright-driver.ts
 async function loadPlaywright() {
   try {
@@ -18832,11 +18847,16 @@ async function loadPlaywright() {
 }
 function playwrightDriverFactory(opts = {}) {
   const timeout = opts.actionTimeoutMs ?? 15e3;
+  const stealth = stealthEnabled();
   return async () => {
     const { chromium } = await loadPlaywright();
-    const browser = await chromium.launch({ headless: opts.headless ?? true });
-    const context = await browser.newContext();
+    const browser = await chromium.launch({
+      headless: opts.headless ?? true,
+      args: hardenedLaunchArgs(stealth)
+    });
+    const context = await browser.newContext(hardenedContextOptions(stealth));
     const page = await context.newPage();
+    if (stealth) await page.addInitScript(MASK_WEBDRIVER);
     page.setDefaultTimeout(timeout);
     return {
       async goto(url) {
@@ -18901,11 +18921,16 @@ var COLLECT_FN = `() => {
 }`;
 function playwrightPerceptionFactory(opts = {}) {
   const timeout = opts.actionTimeoutMs ?? 15e3;
+  const stealth = stealthEnabled();
   return async () => {
     const { chromium } = await loadPlaywright();
-    const browser = await chromium.launch({ headless: opts.headless ?? true });
-    const context = await browser.newContext();
+    const browser = await chromium.launch({
+      headless: opts.headless ?? true,
+      args: hardenedLaunchArgs(stealth)
+    });
+    const context = await browser.newContext(hardenedContextOptions(stealth));
     const page = await context.newPage();
+    if (stealth) await page.addInitScript(MASK_WEBDRIVER);
     page.setDefaultTimeout(timeout);
     return {
       async goto(url) {
@@ -18952,6 +18977,18 @@ var BrowserSessionManager = class {
   }
   async observe(sessionId) {
     const s = this.get(sessionId);
+    const observation = await s.page.observe();
+    s.last = observation.elements;
+    return observation;
+  }
+  /**
+   * Navigue dans la session EXISTANTE (même contexte → cookies/session conservés).
+   * À utiliser pour consommer un magic-link SANS perdre la session qui a initié la
+   * demande (sinon le site rejette pour suspicion de vol de session).
+   */
+  async navigate(sessionId, url) {
+    const s = this.get(sessionId);
+    await s.page.goto(url);
     const observation = await s.page.observe();
     s.last = observation.elements;
     return observation;
@@ -19053,6 +19090,9 @@ function browserOpen(svc, url) {
 }
 function browserObserve(svc, sessionId) {
   return svc.sessions.observe(sessionId);
+}
+function browserNavigate(svc, sessionId, url) {
+  return svc.sessions.navigate(sessionId, url);
 }
 function browserFill(svc, sessionId, target, value) {
   return svc.sessions.fill(sessionId, target, value);
@@ -23358,6 +23398,21 @@ function buildMcpServer(svc) {
     async ({ sessionId }) => {
       try {
         return observationResult(await browserObserve(svc, sessionId));
+      } catch (err) {
+        return errorResult(msg(err));
+      }
+    }
+  );
+  server.registerTool(
+    "browser_navigate",
+    {
+      title: "Navigate in the SAME session",
+      description: "Navigate the existing session to a URL, keeping the same browser context (cookies/session). Use this to open a magic-link in the SAME session that started the signup \u2014 opening it in a fresh browser_open would drop the originating session and the site may reject it (session fixation). Returns the new observation (vision + UI tree).",
+      inputSchema: { sessionId: external_exports.string(), url: external_exports.string().describe("URL to open in this session") }
+    },
+    async ({ sessionId, url }) => {
+      try {
+        return observationResult(await browserNavigate(svc, sessionId, url));
       } catch (err) {
         return errorResult(msg(err));
       }

@@ -69,7 +69,7 @@ claude mcp add waw --env VAULT_PASSPHRASE=… --env MAIL_DOMAIN=agents.example.c
 
 ---
 
-## Tools (15)
+## Tools (16)
 
 | Tool | Purpose |
 |---|---|
@@ -77,8 +77,13 @@ claude mcp add waw --env VAULT_PASSPHRASE=… --env MAIL_DOMAIN=agents.example.c
 | `mailbox_link_owner` | Link the human operator's real email to a mailbox. |
 | `otp_get` / `emails_list` | Read the latest OTP / recent emails for a mailbox. |
 | `signup_run` | Resumable, idempotent autonomous signup (Playwright + vault + OTP). |
-| `browser_open` / `browser_observe` / `browser_fill` / `browser_click` / `browser_close` | Drive a page combining **vision** (screenshot) + **UI tree** (elements/refs/selectors). |
+| `browser_open` / `browser_observe` / `browser_navigate` / `browser_fill` / `browser_click` / `browser_close` | Drive a page combining **vision** (screenshot) + **UI tree** (elements/refs/selectors). `browser_navigate` re-uses the same session (for magic-links). |
 | `registry_search` / `registry_register` / `registry_list` / `registry_get` | Discover or publish MCP servers by intent. |
+
+> **Browser realism**: the Playwright drivers apply generic hardening (no `AutomationControlled`
+> flag, `navigator.webdriver` masked, realistic viewport) — `WAW_STEALTH=0` to disable. This is
+> **not** a bypass for commercial anti-bot (Turnstile/Akamai/PerimeterX); those stay
+> human-in-the-loop. Respect each site's ToS.
 
 ## Autonomous workflow (the point)
 

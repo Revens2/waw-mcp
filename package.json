@@ -1,6 +1,6 @@
 {
   "name": "waw-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WAW — World Agentic Web MCP server: give an AI agent a real email identity, read its OTP/verification codes, sign up autonomously with a browser, and discover/publish MCP servers. Runs anywhere over stdio.",
   "type": "module",
   "bin": {
